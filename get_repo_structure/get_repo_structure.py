@@ -81,7 +81,7 @@ def get_project_structure_from_scratch(
     structure = create_structure(f"{repo_playground}/{repo_to_top_folder[repo_name]}")
     # clean up
     subprocess.run(
-        ["rm", "-rf", f"{repo_playground}/{repo_to_top_folder[repo_name]}"], check=True
+        ["rm", "-rf", f"{repo_playground}/{repo_to_top_folder[repo_name]}"]
     )
     d = {
         "repo": repo_name,

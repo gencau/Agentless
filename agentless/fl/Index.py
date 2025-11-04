@@ -15,6 +15,7 @@ from llama_index.core.callbacks import CallbackManager, TokenCountingHandler
 from llama_index.core.retrievers import VectorIndexRetriever
 from llama_index.core.schema import MetadataMode
 from llama_index.embeddings.openai import OpenAIEmbedding
+from llama_index.core.node_parser import SimpleNodeParser, SentenceSplitter
 
 from agentless.util.api_requests import num_tokens_from_messages
 from agentless.util.index_skeleton import parse_global_stmt_from_code
@@ -55,7 +56,49 @@ def check_meta_data(meta_data: dict) -> bool:
         )
         > Settings.chunk_size // 2
     ):
+        print(f"Metadata too long: {meta_data}")
         # half of the chunk size should not be metadata
+        return False
+
+    return True
+
+def _render_metadata_str(meta: dict, metadata_template: str = "### {key}: {value}") -> str:
+    # mirror LlamaIndex's metadata serialization: one line per key/value
+    lines = []
+    for k, v in meta.items():
+        if v is None:
+            continue
+        lines.append(metadata_template.format(key=k, value=v))
+    return "\n".join(lines)
+
+def _effective_chunk_size() -> int:
+    # Prefer the active parser's chunk size if present, else Settings.chunk_size, else 512
+    try:
+        np = getattr(Settings, "node_parser", None)
+        if np and getattr(np, "chunk_size", None):
+            return np.chunk_size
+    except Exception:
+        pass
+    return (Settings.chunk_size or 512)
+
+def check_meta_data(meta_data: dict) -> bool:
+    # Build the *exact* prefix your text_template creates when {metadata_str} is present.
+    # Your Document uses:
+    #   text_template = "Metadata:\n{metadata_str}\n-----\nCode:\n{content}"
+    metadata_str = _render_metadata_str(meta_data, metadata_template="### {key}: {value}")
+    prefix = f"Metadata:\n{metadata_str}\n-----\n"  # the part that gets prepended before the code
+    prefix_len = len(prefix)
+
+    chunk_size = _effective_chunk_size()
+
+    # Hard fail if metadata alone exceeds chunk size (this is what triggers the ValueError)
+    if prefix_len > chunk_size:
+        print(f"[check_meta_data] Metadata block {prefix_len} > chunk_size {chunk_size}. Excluding metadata.")
+        return False
+
+    # Optional guard: keep metadata under half the budget (same intent as before), but in CHARS
+    if prefix_len > (chunk_size // 2):
+        print(f"[check_meta_data] Metadata block {prefix_len} is > 50% of chunk_size {chunk_size}. Excluding metadata.")
         return False
 
     return True
@@ -219,6 +262,9 @@ class EmbeddingIndex(ABC):
         token_counter = TokenCountingHandler(
             tokenizer=tiktoken.encoding_for_model("text-embedding-3-small").encode
         )
+
+        Settings.callback_manager = CallbackManager([token_counter])
+
         if not os.path.exists(persist_dir) or mock:
             files, _, _ = get_full_file_paths_and_classes_and_functions(self.structure)
             filtered_files = self.filter_files(files)
@@ -255,10 +301,18 @@ class EmbeddingIndex(ABC):
                 embed_model = MockEmbedding(
                     embed_dim=1024
                 )  # embedding dimension does not matter for mocking.
-                Settings.callback_manager = CallbackManager([token_counter])
             else:
                 embed_model = OpenAIEmbedding(model_name="text-embedding-3-small")
-            index = VectorStoreIndex.from_documents(documents, embed_model=embed_model)
+                print("Using real embedding model.")
+            
+            parser = SentenceSplitter(
+                        chunk_size=self.chunk_size,
+                        chunk_overlap=self.chunk_overlap,
+                        include_metadata=False,   # <-- key: don't inline metadata into node.text
+                    )
+
+            index = VectorStoreIndex.from_documents(documents, embed_model=embed_model, transformations=[parser])
+            print(f"Persisting to {persist_dir}")
             index.storage_context.persist(persist_dir=persist_dir)
         else:
             storage_context = StorageContext.from_defaults(persist_dir=persist_dir)
@@ -288,7 +342,12 @@ class EmbeddingIndex(ABC):
         meta_infos = []
 
         for node in documents:
-            file_name = node.node.metadata["File Name"]
+            md = node.node.metadata or {}
+            # if metadata is stripped from node.text, name is different.
+            file_name = (
+                md.get("File Name")
+                or md.get("file_name")
+            )
             if file_name not in file_names:
                 file_names.append(file_name)
                 self.logger.info("================")

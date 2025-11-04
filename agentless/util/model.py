@@ -7,6 +7,7 @@ from agentless.util.api_requests import (
     create_chatgpt_config,
     request_anthropic_engine,
     request_chatgpt_engine,
+    request_ollama_engine
 )
 
 
@@ -383,6 +384,48 @@ class DeepSeekChatDecoder(DecoderBase):
     def is_direct_completion(self) -> bool:
         return False
 
+class QwenChatDecoder(DecoderBase):
+    def __init__(self, name: str, logger, **kwargs) -> None:
+        super().__init__(name, logger, **kwargs)
+
+    def codegen(
+        self, message: str, num_samples: int = 1, prompt_cache: bool = False
+    ) -> List[dict]:
+
+        ret = request_ollama_engine(self.name, message, self.logger, 5)
+        if ret:
+            responses = [ret.content]
+            completion_tokens = ret.usage_metadata["input_tokens"]
+            prompt_tokens = ret.usage_metadata["output_tokens"]
+        else:
+            responses = [""]
+            completion_tokens = 0
+            prompt_tokens = 0
+
+        trajs = [
+            {
+                "response": responses[0],
+                "usage": {
+                    "completion_tokens": completion_tokens,
+                    "prompt_tokens": prompt_tokens,
+                },
+            }
+        ]
+        for response in responses[1:]:
+            trajs.append(
+                {
+                    "response": response,
+                    "usage": {
+                        "completion_tokens": 0,
+                        "prompt_tokens": 0,
+                    },
+                }
+            )
+        return trajs
+
+    def is_direct_completion(self) -> bool:
+        return False
+
 
 def make_model(
     model: str,
@@ -410,6 +453,14 @@ def make_model(
         )
     elif backend == "deepseek":
         return DeepSeekChatDecoder(
+            name=model,
+            logger=logger,
+            batch_size=batch_size,
+            max_new_tokens=max_tokens,
+            temperature=temperature,
+        )
+    elif backend == "local":
+        return QwenChatDecoder(
             name=model,
             logger=logger,
             batch_size=batch_size,

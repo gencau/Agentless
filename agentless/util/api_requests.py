@@ -4,6 +4,7 @@ from typing import Dict, Union
 import anthropic
 import openai
 import tiktoken
+from transformers import AutoTokenizer
 
 
 def num_tokens_from_messages(message, model="gpt-3.5-turbo-0301"):
@@ -11,7 +12,11 @@ def num_tokens_from_messages(message, model="gpt-3.5-turbo-0301"):
     try:
         encoding = tiktoken.encoding_for_model(model)
     except KeyError:
-        encoding = tiktoken.get_encoding("cl100k_base")
+        try:
+            encoding = AutoTokenizer.from_pretrained(model)
+        except KeyError:
+            print("Model not found. Using cl100k_base encoding.")
+            encoding = tiktoken.get_encoding("cl100k_base")
     if isinstance(message, list):
         # use last message.
         num_tokens = len(encoding.encode(message[0]["content"]))
@@ -48,7 +53,6 @@ def create_chatgpt_config(
             ],
         }
     return config
-
 
 def handler(signum, frame):
     # swallow signum and frame
@@ -162,3 +166,38 @@ def request_anthropic_engine(
         retries += 1
 
     return ret
+
+def request_ollama_engine(
+    model: str,
+    message: str,
+    logger,
+    max_retries=40,
+    timeout=100,
+):
+    from langchain_ollama import ChatOllama
+
+    response = None
+    retries = 0
+
+    client = ChatOllama(model=model,
+                        temperature=0.0,
+                        num_predict=2048,
+                        top_k=20,
+                        top_p=0.5)
+
+    while response is None and retries < max_retries:
+        try:
+            logger.info("Creating API request")
+            messages = [{"role": "system", "content": "You are a helpful assistant."},
+                        {"role": "user", "content": message}]
+
+            response = client.invoke(messages)
+
+        except Exception as e:
+            logger.error("Unknown error. Waiting...", exc_info=True)
+            time.sleep(5)
+
+        retries += 1
+
+    logger.info(f"Ollama API response {response}")
+    return response

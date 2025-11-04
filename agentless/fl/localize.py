@@ -42,7 +42,7 @@ def localize_irrelevant_instance(
     bench_data = [x for x in swe_bench_data if x["instance_id"] == instance_id][0]
     problem_statement = bench_data["problem_statement"]
     structure = get_repo_structure(
-        instance_id, bug["repo"], bug["base_commit"], "playground"
+        instance_id, bug["repo"], bug["base_commit"], "/Volumes/T9/playground"
     )
 
     filter_none_python(structure)  # some basic filtering steps
@@ -116,7 +116,7 @@ def localize_instance(
         return
 
     structure = get_repo_structure(
-        instance_id, bug["repo"], bug["base_commit"], "playground"
+        instance_id, bug["repo"], bug["base_commit"], "/Volumes/T9/playground"
     )
 
     logger.info(f"================ localize {instance_id} ================")
@@ -577,13 +577,14 @@ def main():
             "deepseek-coder",
             "gpt-4o-mini-2024-07-18",
             "claude-3-5-sonnet-20241022",
+            "qwen2.5-coder-32b-16k"
         ],
     )
     parser.add_argument(
         "--backend",
         type=str,
         default="openai",
-        choices=["openai", "deepseek", "anthropic"],
+        choices=["openai", "deepseek", "anthropic", "local"],
     )
     parser.add_argument(
         "--dataset",

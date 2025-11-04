@@ -1,5 +1,6 @@
 import json
 import os
+from pathlib import Path
 
 from agentless.util.parse_global_var import parse_global_var_from_code
 from get_repo_structure.get_repo_structure import (
@@ -650,8 +651,10 @@ PROJECT_FILE_LOC = os.environ.get("PROJECT_FILE_LOC", None)
 
 def get_repo_structure(instance_id: str, repo_name, base_commit, playground):
 
-    if PROJECT_FILE_LOC is not None:
-        with open(PROJECT_FILE_LOC + "/" + instance_id + ".json") as f:
+    # TODO: define this path somewhere
+    path = Path("/Volumes/T9/agentless/repo_structures/" + instance_id + ".json")
+    if path.is_file():
+        with open(path) as f:
             d = json.load(f)
         repo_structure = d["structure"]
     else:
@@ -659,6 +662,9 @@ def get_repo_structure(instance_id: str, repo_name, base_commit, playground):
             repo_name, base_commit, instance_id, playground
         )
         repo_structure = d["structure"]
+        path.parent.mkdir(exist_ok=True, parents=True)
+        with open(path, "x") as f:
+            json.dump(d, f)
 
     return repo_structure
 
