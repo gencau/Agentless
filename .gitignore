@@ -185,3 +185,6 @@ dev/
 
 # Jupyter Notebooks
 *.ipynb
+
+# Mac-OS files
+.DS_Store

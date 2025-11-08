@@ -15,7 +15,7 @@ from llama_index.core.callbacks import CallbackManager, TokenCountingHandler
 from llama_index.core.retrievers import VectorIndexRetriever
 from llama_index.core.schema import MetadataMode
 from llama_index.embeddings.openai import OpenAIEmbedding
-from llama_index.core.node_parser import SimpleNodeParser, SentenceSplitter
+from llama_index.core.node_parser import TokenTextSplitter
 
 from agentless.util.api_requests import num_tokens_from_messages
 from agentless.util.index_skeleton import parse_global_stmt_from_code
@@ -43,62 +43,25 @@ def construct_file_meta_data(file_name: str, clazzes: list, functions: list) -> 
 def check_meta_data(meta_data: dict) -> bool:
 
     doc = Document(
-        text="",
+        text="dummy text", # cannot be empty
         metadata=meta_data,
         metadata_template="### {key}: {value}",
         text_template="Metadata:\n{metadata_str}\n-----\nCode:\n{content}",
     )
 
+    num_tokens = num_tokens_from_messages(
+                    doc.get_content(metadata_mode=MetadataMode.EMBED),
+                    model="text-embedding-3-small",
+                )
+    print(f"Metadata token count: {num_tokens}")
+    print(f"Content length: {len(doc.get_content(metadata_mode=MetadataMode.EMBED))}") 
+
     if (
-        num_tokens_from_messages(
-            doc.get_content(metadata_mode=MetadataMode.EMBED),
-            model="text-embedding-3-small",
-        )
+        num_tokens
         > Settings.chunk_size // 2
     ):
-        print(f"Metadata too long: {meta_data}")
+        print("Metadata too long for embedding, excluding metadata.")
         # half of the chunk size should not be metadata
-        return False
-
-    return True
-
-def _render_metadata_str(meta: dict, metadata_template: str = "### {key}: {value}") -> str:
-    # mirror LlamaIndex's metadata serialization: one line per key/value
-    lines = []
-    for k, v in meta.items():
-        if v is None:
-            continue
-        lines.append(metadata_template.format(key=k, value=v))
-    return "\n".join(lines)
-
-def _effective_chunk_size() -> int:
-    # Prefer the active parser's chunk size if present, else Settings.chunk_size, else 512
-    try:
-        np = getattr(Settings, "node_parser", None)
-        if np and getattr(np, "chunk_size", None):
-            return np.chunk_size
-    except Exception:
-        pass
-    return (Settings.chunk_size or 512)
-
-def check_meta_data(meta_data: dict) -> bool:
-    # Build the *exact* prefix your text_template creates when {metadata_str} is present.
-    # Your Document uses:
-    #   text_template = "Metadata:\n{metadata_str}\n-----\nCode:\n{content}"
-    metadata_str = _render_metadata_str(meta_data, metadata_template="### {key}: {value}")
-    prefix = f"Metadata:\n{metadata_str}\n-----\n"  # the part that gets prepended before the code
-    prefix_len = len(prefix)
-
-    chunk_size = _effective_chunk_size()
-
-    # Hard fail if metadata alone exceeds chunk size (this is what triggers the ValueError)
-    if prefix_len > chunk_size:
-        print(f"[check_meta_data] Metadata block {prefix_len} > chunk_size {chunk_size}. Excluding metadata.")
-        return False
-
-    # Optional guard: keep metadata under half the budget (same intent as before), but in CHARS
-    if prefix_len > (chunk_size // 2):
-        print(f"[check_meta_data] Metadata block {prefix_len} is > 50% of chunk_size {chunk_size}. Excluding metadata.")
         return False
 
     return True
@@ -122,6 +85,7 @@ def build_file_documents_simple(
     )
     doc.excluded_embed_metadata_keys = ["file_name"]  # used for searching only.
     doc.excluded_llm_metadata_keys = ["file_name"]  # used for searching only.
+
     if not check_meta_data(meta_data):
         # meta_data a bit too long, instead we just exclude meta data
         doc.excluded_embed_metadata_keys = list(meta_data.keys())
@@ -245,6 +209,10 @@ class EmbeddingIndex(ABC):
 
         Settings.chunk_size = chunk_size
         Settings.chunk_overlap = chunk_overlap
+        Settings.text_splitter = TokenTextSplitter(
+            chunk_size=Settings.chunk_size,
+            chunk_overlap=Settings.chunk_overlap,
+        )
 
     def filter_files(self, files):
         if self.filter_type == "given_files":
@@ -262,7 +230,6 @@ class EmbeddingIndex(ABC):
         token_counter = TokenCountingHandler(
             tokenizer=tiktoken.encoding_for_model("text-embedding-3-small").encode
         )
-
         Settings.callback_manager = CallbackManager([token_counter])
 
         if not os.path.exists(persist_dir) or mock:
@@ -303,16 +270,9 @@ class EmbeddingIndex(ABC):
                 )  # embedding dimension does not matter for mocking.
             else:
                 embed_model = OpenAIEmbedding(model_name="text-embedding-3-small")
-                print("Using real embedding model.")
-            
-            parser = SentenceSplitter(
-                        chunk_size=self.chunk_size,
-                        chunk_overlap=self.chunk_overlap,
-                        include_metadata=False,   # <-- key: don't inline metadata into node.text
-                    )
 
-            index = VectorStoreIndex.from_documents(documents, embed_model=embed_model, transformations=[parser])
-            print(f"Persisting to {persist_dir}")
+            
+            index = VectorStoreIndex.from_documents(documents, embed_model=embed_model)
             index.storage_context.persist(persist_dir=persist_dir)
         else:
             storage_context = StorageContext.from_defaults(persist_dir=persist_dir)
@@ -342,12 +302,7 @@ class EmbeddingIndex(ABC):
         meta_infos = []
 
         for node in documents:
-            md = node.node.metadata or {}
-            # if metadata is stripped from node.text, name is different.
-            file_name = (
-                md.get("File Name")
-                or md.get("file_name")
-            )
+            file_name = node.node.metadata["File Name"]
             if file_name not in file_names:
                 file_names.append(file_name)
                 self.logger.info("================")

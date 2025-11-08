@@ -22,6 +22,8 @@ def num_tokens_from_messages(message, model="gpt-3.5-turbo-0301"):
         num_tokens = len(encoding.encode(message[0]["content"]))
     else:
         num_tokens = len(encoding.encode(message))
+
+    print(f"Number of tokens in message: {num_tokens}")
     return num_tokens
 
 

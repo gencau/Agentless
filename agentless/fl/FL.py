@@ -39,7 +39,7 @@ Please look through the following GitHub problem description and Repository stru
 
 ###
 
-Please only provide the full path and return at most 10 files.
+Please only provide the full path and return at most 5 files.
 The returned files should be separated by new lines ordered by most to least important and wrapped with ```
 For example:
 ```
